@@ -1,18 +1,18 @@
 # net-rush
-### Simple network packet flooder
+### Простой флудер сетевыми пакетами
 
-## Compilation
-First of all, you need G++ installed: `sudo apt install g++ -y`.<br>
-To compile main.cpp you can use this command: `g++ main.cpp -o main`
+## Компиляция
+Прежде всего, у вас должен быть установлен компилятор G++: `sudo apt install g++ -y`.<br>
+Чтобы скомпилировать `main.cpp` вы можете использовать эту команду: `g++ main.cpp -o main`
 
-## Available methods
-### normal methods
-`utcpsyn` - SYN flood
-`utcpflood` - TCP flood with junk packets (but it have a problem: it sends a really few amount of packets: 20-30 per second).
-`uudpflood` - UDP flood.
+## Доступные методы флуда
+### Стандартные методы
+`utcpsyn` - флуд TCP SYN пакетами
+`utcpflood` - флуд TCP пакетами с мусорной информацией (на данный момент есть большая проблема: она отправляет очень маленькое количество пакетов - примерно 20)
+`uudpflood` - флуд мусорными UDP пакетами
 
-### root-required methods
-`rtcpflood` - flooding junk TCP packets with raw sockets.
-**Important note: ** I checked this method on dstat.cc server and i did not saw incoming packets, but I saw a lot of outgoing packets from my pc network interface.
+### Методы, требующие повышенные привилегии 
+`rtcpflood` - флуд мусорными TCP пакетами с помощью сырого сокета (raw socket)
+**Примечание: ** я протестировал этот метод на одном сервере в dstat.cc и на сервере не было прибавления входящих пакетов, НО когда я проверял исходящий трафик моего сетевого интерфейса - они были.
 
-### You can see more information using `./main --help` command.
+### Вы можете узнать побольше выполнив команду `./main --help`.
